@@ -3,6 +3,7 @@ let progress = { current: 0, total: 0, savedCount: 0, skipped: 0, done: false, e
 
 browser.runtime.onMessage.addListener((message, sender) => {
   if (message.action === 'startCapture') {
+    console.log('TabScreenShotter: received startCapture, windowId:', message.windowId);
     if (!isRunning) {
       runCapture(message.windowId);
     }
@@ -18,7 +19,6 @@ let keepAliveInterval = null;
 
 function startKeepAlive() {
   keepAliveInterval = setInterval(() => {
-    // Any API call resets the idle timer
     browser.runtime.getPlatformInfo();
   }, 20000);
 }
@@ -44,36 +44,47 @@ async function runCapture(windowId) {
 
   try {
     const allTabs = await browser.tabs.query({ windowId });
+    console.log('TabScreenShotter: total tabs found:', allTabs.length);
+    console.log('TabScreenShotter: tab URLs:', allTabs.map((t) => t.url));
+
     const tabs = allTabs.filter((tab) => !isRestrictedTab(tab));
+    console.log('TabScreenShotter: non-restricted tabs:', tabs.length);
+
     progress.total = tabs.length;
     progress.skipped = allTabs.length - tabs.length;
 
     for (let i = 0; i < tabs.length; i++) {
       progress.current = i + 1;
       const tab = tabs[i];
+      console.log(`TabScreenShotter: [${i + 1}/${tabs.length}] processing tab ${tab.id}: ${tab.url}`);
 
       try {
         await browser.tabs.update(tab.id, { active: true });
+        console.log(`TabScreenShotter: [${i + 1}] tab activated, waiting for paint...`);
 
-        // Wait for the tab to actually become active
         await waitForTabActive(tab.id);
+        console.log(`TabScreenShotter: [${i + 1}] paint wait complete`);
 
         const [injectionResult] = await browser.scripting.executeScript({
           target: { tabId: tab.id },
           func: getImageRect
         });
+        console.log(`TabScreenShotter: [${i + 1}] injection result:`, JSON.stringify(injectionResult?.result));
 
         if (!injectionResult || !injectionResult.result) {
+          console.log(`TabScreenShotter: [${i + 1}] no image found, skipping`);
           progress.skipped++;
           continue;
         }
 
         const { rect, devicePixelRatio } = injectionResult.result;
+        console.log(`TabScreenShotter: [${i + 1}] image rect:`, JSON.stringify(rect), 'dpr:', devicePixelRatio);
 
-        // Retry captureVisibleTab — Firefox needs the tab fully painted
         const dataUrl = await captureWithRetry();
+        console.log(`TabScreenShotter: [${i + 1}] captured, dataUrl length:`, dataUrl.length);
 
         const croppedDataUrl = await cropImage(dataUrl, rect, devicePixelRatio);
+        console.log(`TabScreenShotter: [${i + 1}] cropped, dataUrl length:`, croppedDataUrl.length);
 
         const filename = generateFilename() + '.png';
 
@@ -82,19 +93,21 @@ async function runCapture(windowId) {
           filename: `TabScreenShotter/${filename}`,
           saveAs: false
         });
+        console.log(`TabScreenShotter: [${i + 1}] saved as ${filename}`);
 
         progress.savedCount++;
       } catch (tabErr) {
         progress.skipped++;
-        console.error(`TabScreenShotter: failed on tab ${tab.id} (${tab.url}):`, tabErr.message);
+        console.error(`TabScreenShotter: [${i + 1}] FAILED on tab ${tab.id} (${tab.url}):`, tabErr);
       }
     }
 
     progress.done = true;
+    console.log('TabScreenShotter: complete. saved:', progress.savedCount, 'skipped:', progress.skipped);
   } catch (err) {
     progress.error = err.message;
     progress.done = true;
-    console.error('TabScreenShotter: fatal error:', err.message);
+    console.error('TabScreenShotter: FATAL error:', err);
   } finally {
     isRunning = false;
     stopKeepAlive();
@@ -106,12 +119,10 @@ function waitForTabActive(tabId) {
     function listener(activeInfo) {
       if (activeInfo.tabId === tabId) {
         browser.tabs.onActivated.removeListener(listener);
-        // Extra buffer for Firefox to finish painting
         setTimeout(resolve, 500);
       }
     }
     browser.tabs.onActivated.addListener(listener);
-    // Fallback if the event already fired before we attached
     setTimeout(() => {
       browser.tabs.onActivated.removeListener(listener);
       resolve();
@@ -125,8 +136,11 @@ const RETRY_DELAYS_MS = [200, 400, 800, 1500, 3000];
 async function captureWithRetry() {
   for (let attempt = 0; attempt < MAX_CAPTURE_RETRIES; attempt++) {
     try {
-      return await browser.tabs.captureVisibleTab(null, { format: 'png' });
+      const result = await browser.tabs.captureVisibleTab(null, { format: 'png' });
+      if (attempt > 0) console.log(`TabScreenShotter: capture succeeded on attempt ${attempt + 1}`);
+      return result;
     } catch (err) {
+      console.warn(`TabScreenShotter: capture attempt ${attempt + 1} failed:`, err.message);
       if (attempt === MAX_CAPTURE_RETRIES - 1) throw err;
       await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
     }
@@ -165,7 +179,6 @@ async function cropImage(dataUrl, rect, dpr) {
 
   const croppedBlob = await canvas.convertToBlob({ type: 'image/png' });
 
-  // Convert to data URL — Firefox cannot download blob/object URLs from background scripts
   const buffer = await croppedBlob.arrayBuffer();
   const bytes = new Uint8Array(buffer);
   let binary = '';
