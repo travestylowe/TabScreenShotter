@@ -6,10 +6,20 @@ const logEl = document.getElementById('log');
 
 const RESTRICTED_SCHEMES = ['about:', 'chrome:', 'resource:', 'moz-extension:', 'data:'];
 
+const copyLogBtn = document.getElementById('copyLogBtn');
+
 function log(msg) {
   logEl.textContent += msg + '\n';
   logEl.scrollTop = logEl.scrollHeight;
+  copyLogBtn.style.display = 'block';
 }
+
+copyLogBtn.addEventListener('click', () => {
+  navigator.clipboard.writeText(logEl.textContent).then(() => {
+    copyLogBtn.textContent = 'Copied!';
+    setTimeout(() => { copyLogBtn.textContent = 'Copy Logs'; }, 1500);
+  });
+});
 
 async function checkPermissions() {
   const granted = await browser.permissions.contains({ origins: ['<all_urls>'] });
