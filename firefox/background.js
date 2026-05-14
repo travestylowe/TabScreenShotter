@@ -54,7 +54,9 @@ async function runCapture(windowId) {
 
       try {
         await browser.tabs.update(tab.id, { active: true });
-        await new Promise((resolve) => setTimeout(resolve, 400));
+
+        // Wait for the tab to actually become active
+        await waitForTabActive(tab.id);
 
         const [injectionResult] = await browser.scripting.executeScript({
           target: { tabId: tab.id },
@@ -68,9 +70,8 @@ async function runCapture(windowId) {
 
         const { rect, devicePixelRatio } = injectionResult.result;
 
-        const dataUrl = await browser.tabs.captureVisibleTab(null, {
-          format: 'png'
-        });
+        // Retry captureVisibleTab — Firefox needs the tab fully painted
+        const dataUrl = await captureWithRetry();
 
         const croppedDataUrl = await cropImage(dataUrl, rect, devicePixelRatio);
 
@@ -97,6 +98,38 @@ async function runCapture(windowId) {
   } finally {
     isRunning = false;
     stopKeepAlive();
+  }
+}
+
+function waitForTabActive(tabId) {
+  return new Promise((resolve) => {
+    function listener(activeInfo) {
+      if (activeInfo.tabId === tabId) {
+        browser.tabs.onActivated.removeListener(listener);
+        // Extra buffer for Firefox to finish painting
+        setTimeout(resolve, 500);
+      }
+    }
+    browser.tabs.onActivated.addListener(listener);
+    // Fallback if the event already fired before we attached
+    setTimeout(() => {
+      browser.tabs.onActivated.removeListener(listener);
+      resolve();
+    }, 2000);
+  });
+}
+
+const MAX_CAPTURE_RETRIES = 5;
+const RETRY_DELAYS_MS = [200, 400, 800, 1500, 3000];
+
+async function captureWithRetry() {
+  for (let attempt = 0; attempt < MAX_CAPTURE_RETRIES; attempt++) {
+    try {
+      return await browser.tabs.captureVisibleTab(null, { format: 'png' });
+    } catch (err) {
+      if (attempt === MAX_CAPTURE_RETRIES - 1) throw err;
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+    }
   }
 }
 
