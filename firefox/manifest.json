@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TabScreenShotter",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Screenshots every image tab in the current window, cropped to image bounds.",
   "permissions": [
     "tabs",
@@ -10,6 +10,7 @@
     "downloads"
   ],
   "host_permissions": ["<all_urls>"],
+  "optional_permissions": [],
   "incognito": "spanning",
   "action": {
     "default_popup": "popup.html",

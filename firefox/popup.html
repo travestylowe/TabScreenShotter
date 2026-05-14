@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <style>
     body {
-      width: 280px;
+      width: 300px;
       padding: 16px;
       font-family: system-ui, sans-serif;
       font-size: 14px;
@@ -38,6 +38,15 @@
       font-size: 12px;
       color: #666;
     }
+    #permWarning {
+      display: none;
+      margin-top: 12px;
+      padding: 8px;
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      border-radius: 4px;
+      font-size: 12px;
+    }
     .note {
       margin-top: 12px;
       font-size: 11px;
@@ -47,10 +56,13 @@
 </head>
 <body>
   <h1>TabScreenShotter</h1>
+  <div id="permWarning">
+    Host permissions required. Go to about:addons &rarr; TabScreenShotter &rarr; Permissions &rarr; enable "Access your data for all websites".
+  </div>
   <button id="startBtn">Start Capture</button>
   <div id="status"></div>
   <div id="progress"></div>
-  <div class="note">Screenshots save to your Downloads/TabScreenShotter folder.</div>
+  <div class="note">Screenshots save to Downloads/TabScreenShotter/</div>
   <script src="popup.js"></script>
 </body>
 </html>
