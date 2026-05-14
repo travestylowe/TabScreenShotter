@@ -2,12 +2,18 @@ const startBtn = document.getElementById('startBtn');
 const statusEl = document.getElementById('status');
 const progressEl = document.getElementById('progress');
 const permWarning = document.getElementById('permWarning');
+const logEl = document.getElementById('log');
 
 const RESTRICTED_SCHEMES = ['about:', 'chrome:', 'resource:', 'moz-extension:', 'data:'];
 
-// Check if host permissions are granted
+function log(msg) {
+  logEl.textContent += msg + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
 async function checkPermissions() {
   const granted = await browser.permissions.contains({ origins: ['<all_urls>'] });
+  log('permissions check: ' + (granted ? 'granted' : 'NOT granted'));
   if (!granted) {
     permWarning.style.display = 'block';
     startBtn.disabled = true;
@@ -23,14 +29,29 @@ startBtn.addEventListener('click', async () => {
   if (!hasPerms) return;
 
   startBtn.disabled = true;
+  logEl.textContent = '';
   statusEl.textContent = 'Querying tabs...';
   progressEl.textContent = '';
 
-  const allTabs = await browser.tabs.query({ currentWindow: true });
+  let allTabs;
+  try {
+    allTabs = await browser.tabs.query({ currentWindow: true });
+    log('total tabs in window: ' + allTabs.length);
+  } catch (err) {
+    log('ERROR querying tabs: ' + err.message);
+    startBtn.disabled = false;
+    return;
+  }
+
   const tabs = allTabs.filter((tab) => {
     if (!tab.url) return false;
     return !RESTRICTED_SCHEMES.some((scheme) => tab.url.startsWith(scheme));
   });
+
+  log('eligible tabs: ' + tabs.length);
+  if (tabs.length > 0) {
+    log('first tab URL: ' + tabs[0].url);
+  }
 
   const totalTabs = tabs.length;
   statusEl.textContent = `Found ${totalTabs} eligible tabs.`;
@@ -43,7 +64,8 @@ startBtn.addEventListener('click', async () => {
     progressEl.textContent = `Processing tab ${i + 1} of ${totalTabs}...`;
 
     try {
-      // Get image bounding rect by injecting into the tab
+      // Step 1: inject script to get image rect
+      log(`[${i + 1}] injecting into tab ${tab.id}...`);
       const [injectionResult] = await browser.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
@@ -58,34 +80,41 @@ startBtn.addEventListener('click', async () => {
       });
 
       if (!injectionResult || !injectionResult.result) {
+        log(`[${i + 1}] no image found`);
         skipped++;
         continue;
       }
 
       const { rect, devicePixelRatio } = injectionResult.result;
+      log(`[${i + 1}] image: ${rect.width}x${rect.height} @ dpr ${devicePixelRatio}`);
 
       if (rect.width === 0 || rect.height === 0) {
+        log(`[${i + 1}] zero-size image, skipping`);
         skipped++;
         continue;
       }
 
-      // Capture the tab without switching to it (Firefox-only API)
+      // Step 2: capture the tab (Firefox-only, no tab switch needed)
+      log(`[${i + 1}] capturing...`);
       const dataUrl = await browser.tabs.captureTab(tab.id, { format: 'png' });
+      log(`[${i + 1}] captured, length: ${dataUrl.length}`);
 
-      // Crop to image bounds
+      // Step 3: crop
       const croppedDataUrl = await cropImage(dataUrl, rect, devicePixelRatio);
+      log(`[${i + 1}] cropped, length: ${croppedDataUrl.length}`);
 
-      // Save
+      // Step 4: download
       const filename = generateFilename() + '.png';
       await browser.downloads.download({
         url: croppedDataUrl,
         filename: `TabScreenShotter/${filename}`,
         saveAs: false
       });
+      log(`[${i + 1}] saved: ${filename}`);
 
       savedCount++;
     } catch (err) {
-      console.error(`TabScreenShotter: tab ${tab.id} (${tab.url}) failed:`, err);
+      log(`[${i + 1}] ERROR: ${err.message}`);
       skipped++;
     }
   }
