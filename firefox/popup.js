@@ -9,7 +9,12 @@ startBtn.addEventListener('click', async () => {
   statusEl.textContent = 'Starting capture...';
   progressEl.textContent = '';
 
-  await browser.runtime.sendMessage({ action: 'startCapture' });
+  const currentWindow = await browser.windows.getCurrent();
+
+  await browser.runtime.sendMessage({
+    action: 'startCapture',
+    windowId: currentWindow.id
+  });
 
   pollInterval = setInterval(async () => {
     const p = await browser.runtime.sendMessage({ action: 'getProgress' });

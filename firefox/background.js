@@ -4,7 +4,7 @@ let progress = { current: 0, total: 0, savedCount: 0, skipped: 0, done: false, e
 browser.runtime.onMessage.addListener((message, sender) => {
   if (message.action === 'startCapture') {
     if (!isRunning) {
-      runCapture();
+      runCapture(message.windowId);
     }
     return Promise.resolve({ started: true });
   }
@@ -37,13 +37,13 @@ function isRestrictedTab(tab) {
   return RESTRICTED_SCHEMES.some((scheme) => tab.url.startsWith(scheme));
 }
 
-async function runCapture() {
+async function runCapture(windowId) {
   isRunning = true;
   progress = { current: 0, total: 0, savedCount: 0, skipped: 0, done: false, error: null };
   startKeepAlive();
 
   try {
-    const allTabs = await browser.tabs.query({ currentWindow: true });
+    const allTabs = await browser.tabs.query({ windowId });
     const tabs = allTabs.filter((tab) => !isRestrictedTab(tab));
     progress.total = tabs.length;
     progress.skipped = allTabs.length - tabs.length;
