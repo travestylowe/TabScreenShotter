@@ -9,6 +9,7 @@
     "scripting",
     "downloads"
   ],
+  "host_permissions": ["<all_urls>"],
   "incognito": "spanning",
   "action": {
     "default_popup": "popup.html",

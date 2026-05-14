@@ -2,33 +2,24 @@ const startBtn = document.getElementById('startBtn');
 const statusEl = document.getElementById('status');
 const progressEl = document.getElementById('progress');
 
+let pollInterval = null;
+
 startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
   statusEl.textContent = 'Starting capture...';
   progressEl.textContent = '';
 
-  const tabs = await browser.tabs.query({ currentWindow: true });
-  const totalTabs = tabs.length;
-  let savedCount = 0;
+  await browser.runtime.sendMessage({ action: 'startCapture' });
 
-  for (let i = 0; i < totalTabs; i++) {
-    const tab = tabs[i];
-    progressEl.textContent = `Processing tab ${i + 1} of ${totalTabs}...`;
+  pollInterval = setInterval(async () => {
+    const p = await browser.runtime.sendMessage({ action: 'getProgress' });
+    progressEl.textContent = `Processing tab ${p.current} of ${p.total}...`;
 
-    const result = await browser.runtime.sendMessage({
-      action: 'captureTab',
-      tabId: tab.id
-    });
-
-    if (result.error) {
-      progressEl.textContent = `Tab ${i + 1}: skipped (${result.error})`;
-      continue;
+    if (p.done) {
+      clearInterval(pollInterval);
+      statusEl.textContent = `Done! ${p.savedCount} screenshot(s) saved.`;
+      progressEl.textContent = '';
+      startBtn.disabled = false;
     }
-
-    savedCount++;
-  }
-
-  statusEl.textContent = `Done! ${savedCount} screenshot(s) saved.`;
-  progressEl.textContent = '';
-  startBtn.disabled = false;
+  }, 500);
 });

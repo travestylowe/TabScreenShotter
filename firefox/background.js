@@ -1,44 +1,102 @@
+let isRunning = false;
+let progress = { current: 0, total: 0, savedCount: 0, skipped: 0, done: false, error: null };
+
 browser.runtime.onMessage.addListener((message, sender) => {
-  if (message.action === 'captureTab') {
-    return handleCaptureTab(message.tabId);
+  if (message.action === 'startCapture') {
+    if (!isRunning) {
+      runCapture();
+    }
+    return Promise.resolve({ started: true });
+  }
+  if (message.action === 'getProgress') {
+    return Promise.resolve({ ...progress });
   }
 });
 
-async function handleCaptureTab(tabId) {
+// Keep-alive: prevent Firefox from killing the event page during capture
+let keepAliveInterval = null;
+
+function startKeepAlive() {
+  keepAliveInterval = setInterval(() => {
+    // Any API call resets the idle timer
+    browser.runtime.getPlatformInfo();
+  }, 20000);
+}
+
+function stopKeepAlive() {
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
+  }
+}
+
+const RESTRICTED_SCHEMES = ['about:', 'chrome:', 'resource:', 'moz-extension:', 'data:'];
+
+function isRestrictedTab(tab) {
+  if (!tab.url) return true;
+  return RESTRICTED_SCHEMES.some((scheme) => tab.url.startsWith(scheme));
+}
+
+async function runCapture() {
+  isRunning = true;
+  progress = { current: 0, total: 0, savedCount: 0, skipped: 0, done: false, error: null };
+  startKeepAlive();
+
   try {
-    await browser.tabs.update(tabId, { active: true });
+    const allTabs = await browser.tabs.query({ currentWindow: true });
+    const tabs = allTabs.filter((tab) => !isRestrictedTab(tab));
+    progress.total = tabs.length;
+    progress.skipped = allTabs.length - tabs.length;
 
-    // Brief delay to let the tab render after activation
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    for (let i = 0; i < tabs.length; i++) {
+      progress.current = i + 1;
+      const tab = tabs[i];
 
-    const [injectionResult] = await browser.scripting.executeScript({
-      target: { tabId },
-      func: getImageRect
-    });
+      try {
+        await browser.tabs.update(tab.id, { active: true });
+        await new Promise((resolve) => setTimeout(resolve, 400));
 
-    if (!injectionResult || !injectionResult.result) {
-      return { error: 'no image found' };
+        const [injectionResult] = await browser.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: getImageRect
+        });
+
+        if (!injectionResult || !injectionResult.result) {
+          progress.skipped++;
+          continue;
+        }
+
+        const { rect, devicePixelRatio } = injectionResult.result;
+
+        const dataUrl = await browser.tabs.captureVisibleTab(null, {
+          format: 'png'
+        });
+
+        const croppedDataUrl = await cropImage(dataUrl, rect, devicePixelRatio);
+
+        const filename = generateFilename() + '.png';
+
+        await browser.downloads.download({
+          url: croppedDataUrl,
+          filename: `TabScreenShotter/${filename}`,
+          saveAs: false
+        });
+
+        progress.savedCount++;
+      } catch (tabErr) {
+        progress.skipped++;
+        console.error(`TabScreenShotter: failed on tab ${tab.id} (${tab.url}):`, tabErr.message);
+      }
     }
 
-    const { rect, devicePixelRatio } = injectionResult.result;
-
-    const dataUrl = await browser.tabs.captureVisibleTab(null, {
-      format: 'png'
-    });
-
-    const croppedDataUrl = await cropImage(dataUrl, rect, devicePixelRatio);
-
-    const filename = generateFilename() + '.png';
-
-    await browser.downloads.download({
-      url: croppedDataUrl,
-      filename: `TabScreenShotter/${filename}`,
-      saveAs: false
-    });
-
-    return { success: true };
+    progress.done = true;
   } catch (err) {
-    return { error: err.message };
+    progress.error = err.message;
+    progress.done = true;
+    console.error('TabScreenShotter: fatal error:', err.message);
+  } finally {
+    isRunning = false;
+    stopKeepAlive();
   }
 }
 
@@ -73,7 +131,15 @@ async function cropImage(dataUrl, rect, dpr) {
   ctx.drawImage(bitmap, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
   const croppedBlob = await canvas.convertToBlob({ type: 'image/png' });
-  return URL.createObjectURL(croppedBlob);
+
+  // Convert to data URL — Firefox cannot download blob/object URLs from background scripts
+  const buffer = await croppedBlob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return `data:image/png;base64,${btoa(binary)}`;
 }
 
 function generateFilename() {
